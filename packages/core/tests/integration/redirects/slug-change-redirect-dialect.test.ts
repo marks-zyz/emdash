@@ -1,7 +1,12 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
-import { handleContentUpdate } from "../../../src/api/handlers/content.js";
+import {
+	handleContentCreate,
+	handleContentDelete,
+	handleContentPublish,
+	handleContentUpdate,
+} from "../../../src/api/handlers/content.js";
 import { ContentRepository } from "../../../src/database/repositories/content.js";
 import { RedirectRepository } from "../../../src/database/repositories/redirect.js";
 import type { Database } from "../../../src/database/types.js";
@@ -80,5 +85,68 @@ describeEachDialect("published slug-change redirects", (dialect) => {
 			expect.objectContaining({ source: "/blog/a", destination: "/blog/b", auto: 1 }),
 			expect.objectContaining({ source: "/promo", destination: "/blog/b" }),
 		]);
+	});
+
+	/** Publish `a`, rename it to `b` (leaving a 301 on `/blog/a`), then trash it. */
+	async function renameAwayAndTrash(): Promise<void> {
+		const entry = await new ContentRepository(db).create({
+			type: "posts",
+			slug: "a",
+			status: "published",
+			data: { title: "Old A" },
+		});
+		await expect(handleContentUpdate(db, "posts", entry.id, { slug: "b" })).resolves.toMatchObject({
+			success: true,
+		});
+		await expect(new RedirectRepository(db).matchPath("/blog/a")).resolves.toMatchObject({
+			resolvedDestination: "/blog/b",
+		});
+		await expect(handleContentDelete(db, "posts", entry.id)).resolves.toMatchObject({
+			success: true,
+		});
+	}
+
+	it("removes the auto-redirect from the URL a new entry is published at", async () => {
+		await renameAwayAndTrash();
+		const created = await handleContentCreate(db, "posts", { data: { title: "New A" }, slug: "a" });
+		await expect(handleContentPublish(db, "posts", created.data!.item.id)).resolves.toMatchObject({
+			success: true,
+		});
+
+		await expect(new RedirectRepository(db).matchPath("/blog/a")).resolves.toBeNull();
+	});
+
+	it("removes the auto-redirect when a new entry is created as published", async () => {
+		await renameAwayAndTrash();
+		await expect(
+			handleContentCreate(db, "posts", {
+				data: { title: "New A" },
+				slug: "a",
+				status: "published",
+			}),
+		).resolves.toMatchObject({ success: true });
+
+		await expect(new RedirectRepository(db).matchPath("/blog/a")).resolves.toBeNull();
+	});
+
+	it("removes the auto-redirect when an update publishes a new entry", async () => {
+		await renameAwayAndTrash();
+		const created = await handleContentCreate(db, "posts", { data: { title: "New A" }, slug: "a" });
+		await expect(
+			handleContentUpdate(db, "posts", created.data!.item.id, { status: "published" }),
+		).resolves.toMatchObject({ success: true });
+
+		await expect(new RedirectRepository(db).matchPath("/blog/a")).resolves.toBeNull();
+	});
+
+	it("keeps a manual redirect from the URL a new entry is published at", async () => {
+		await new RedirectRepository(db).create({ source: "/blog/a", destination: "/promo" });
+		await expect(
+			handleContentCreate(db, "posts", { data: { title: "A" }, slug: "a", status: "published" }),
+		).resolves.toMatchObject({ success: true });
+
+		await expect(new RedirectRepository(db).matchPath("/blog/a")).resolves.toMatchObject({
+			resolvedDestination: "/promo",
+		});
 	});
 });
