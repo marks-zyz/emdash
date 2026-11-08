@@ -2307,6 +2307,33 @@ describe("ContentEditor", () => {
 			expect(onPublish).toHaveBeenCalledOnce();
 		});
 
+		it("disables the Publish button while the publish request is in flight", async () => {
+			const item = makeItem({ status: "draft" });
+			let finishPublish: () => void = () => {};
+			const onPublish = vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishPublish = resolve;
+					}),
+			);
+			const screen = await renderEditor({ isNew: false, item, onPublish });
+			await screen.getByRole("button", { name: "Publish now", exact: true }).click();
+			screen
+				.getByRole("dialog", { name: "Publish now?" })
+				.getByRole("button", { name: "Publish now", exact: true })
+				.element()
+				.click();
+			expect(onPublish).toHaveBeenCalledOnce();
+
+			// The request has not settled, so the editor is publishing: the button must
+			// show it (kumo disables a Button that is `loading`), not stay clickable.
+			await expect
+				.element(screen.getByRole("button", { name: "Publish now", exact: true }))
+				.toBeDisabled();
+
+			finishPublish();
+		});
+
 		it("shows Preview in normal mode when previews are supported", async () => {
 			const item = makeItem({ status: "draft" });
 			const screen = await renderEditor({ isNew: false, item, supportsPreview: true });
